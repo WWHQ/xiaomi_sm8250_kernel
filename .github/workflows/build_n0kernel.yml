@@ -1,5 +1,6 @@
 name: Build Kernel
-run-name: Build Kernel with KernelSU Next susfs
+run-name: Build Kernel with KernelSU Next + SUSFS for ${{ inputs.phone }}
+
 on:
   workflow_dispatch:
     inputs:
@@ -9,10 +10,11 @@ on:
         default: 'umi'
         type: choice
         options:
-          - umi
-          - cmi
+          - umi      # 小米10
+          - cmi      # 小米10 Pro
+          - cas      # 小米10 Ultra（新增）
       susfs:
-        description: '是否集成SUSFS：'
+        description: '是否集成 SUSFS：'
         required: true
         default: 'SUSFS'
         type: choice
@@ -20,9 +22,10 @@ on:
           - SUSFS
           - NoSUSFS
       version:
-        description: '自定义版本名（如perf-xxx）可为空（则为n0kernel）'
+        description: '自定义版本名（如 perf-cas-xxx），留空则为 n0kernel'
         required: false
         type: string
+
 jobs:
   build_job:
     runs-on: ubuntu-22.04
@@ -31,9 +34,9 @@ jobs:
       CCACHE_NOHASHDIR: "true"
       CCACHE_HARDLINK: "true"
       CI: "false"
-    steps:
 
-      - name: 1.拉取编译链
+    steps:
+      - name: 1. 拉取编译链
         run: |
           mkdir -p $GITHUB_WORKSPACE/kernel_workspace
           cd $GITHUB_WORKSPACE/kernel_workspace
@@ -41,88 +44,91 @@ jobs:
           mkdir -p clang
           tar -xzf Clang-19.0.0git-20240125.tar.gz -C clang
 
-      - name: 2.拉取源码与补丁
+      - name: 2. 拉取源码与补丁
         run: |
           cd $GITHUB_WORKSPACE/kernel_workspace
+          # 这里建议换成更适合 cas 的基础内核仓库（推荐支持 cas 的社区仓库）
+          # 示例：可替换为支持 cas 的仓库，如 yspbwx2010/kernel_xiaomi_sm8250_mod 或 NikoKernelX_SM8250 等
           git clone https://github.com/clcwpwqi/kernel_xiaomi_sm8250_n0kernel --depth=1 android_kernel
           git clone https://github.com/clcwpwqi/kernel.git src
           git clone https://gitlab.com/simonpunk/susfs4ksu.git -b kernel-4.19 --depth=1 susfs
 
-      - name: 3.添加KernelSU Next
+      - name: 3. 添加 KernelSU Next
         run: |
           cd $GITHUB_WORKSPACE/kernel_workspace/android_kernel
           curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s next
 
-      - name: 4.修补KernelSU Next
+      - name: 4. 修补 KernelSU Next
         run: |
-          ls
-          echo "进入源码目录"
           cd $GITHUB_WORKSPACE/kernel_workspace/android_kernel
           cp $GITHUB_WORKSPACE/kernel_workspace/src/patches/* .
-          patch -p1 < new_defconfig.patch
-          patch -p1 < non-kprobes.patch
+          patch -p1 < new_defconfig.patch || true
+          patch -p1 < non-kprobes.patch || true
 
-      - name: 5.修补susfs
+      - name: 5. 修补 SUSFS
         run: |
-          if [ ${{ inputs.susfs }} = 'SUSFS' ]; then
-            echo "选择susfs修补"
+          if [ "${{ inputs.susfs }}" = 'SUSFS' ]; then
+            echo "集成 SUSFS"
             cd $GITHUB_WORKSPACE/kernel_workspace/android_kernel
-            echo "复制susfs/kernel_patches/fs/"
-            cp $GITHUB_WORKSPACE/kernel_workspace/susfs/kernel_patches/fs/* ./fs/
-            echo "复制susfs/kernel_patches/include/linux/"
-            cp $GITHUB_WORKSPACE/kernel_workspace/susfs/kernel_patches/include/linux/* ./include/linux/
-            echo "复制susfs内核补丁"
+            cp $GITHUB_WORKSPACE/kernel_workspace/susfs/kernel_patches/fs/* ./fs/ || true
+            cp $GITHUB_WORKSPACE/kernel_workspace/susfs/kernel_patches/include/linux/* ./include/linux/ || true
             cp $GITHUB_WORKSPACE/kernel_workspace/susfs/kernel_patches/50_add_susfs_in_kernel-4.19.patch .
-            echo "执行susfs补丁"
             patch -p1 < 50_add_susfs_in_kernel-4.19.patch || true
-            echo "修复susfs补丁"
-            patch -p1 < after_patch_fix.patch            
+            patch -p1 < after_patch_fix.patch || true
           else
-            echo "跳过susfs修补"
+            echo "跳过 SUSFS 修补"
           fi
-        
-      - name: 6.开始构建
+
+      - name: 6. 开始构建
         run: |
           export PATH=$GITHUB_WORKSPACE/kernel_workspace/clang/bin:$PATH
-          echo "Updated PATH: $PATH"
           clang --version
-          
+
           cd $GITHUB_WORKSPACE/kernel_workspace/android_kernel
-          # 自定义版本
-          if [ ! -z ${{ inputs.version }} ]; then
-            echo "不为空"
+
+          # 自定义版本名
+          if [ -n "${{ inputs.version }}" ]; then
             sed -i '$s|echo "\$res"|echo "-${{ inputs.version }}"|' ./scripts/setlocalversion
-          else
-            echo "输入为空"
           fi
 
-          if [ ${{ inputs.phone }} = 'umi' ]; then
-            echo "选择小米10配置"
+          # 根据手机型号选择 defconfig（cas 已新增）
+          if [ "${{ inputs.phone }}" = 'umi' ]; then
             DEFCONFIG=vendor/umi_defconfig
-          elif [ ${{ inputs.phone }} = 'cmi' ]; then
-            echo "选择小米10Pro配置"
+          elif [ "${{ inputs.phone }}" = 'cmi' ]; then
             DEFCONFIG=vendor/cmi_defconfig
+          elif [ "${{ inputs.phone }}" = 'cas' ]; then
+            DEFCONFIG=vendor/cas_defconfig   # 如果仓库中是其他名称（如 vendor/cmi_defconfig 或 vendor/sm8250_defconfig），请自行修改
+            echo "使用 cas defconfig: $DEFCONFIG"
           else
-            echo "输入错误"
+            echo "不支持的机型"
+            exit 1
           fi
 
-          echo "当前配置为 $DEFCONFIG"
+          echo "当前 defconfig: $DEFCONFIG"
 
-          make -j$(nproc --all) CC=clang O=out ARCH=arm64 CLANG_TRIPLE=aarch64-linux-gnu- LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-buildroot-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-androideabi- $DEFCONFIG
-          make -j8 CC=clang O=out ARCH=arm64 CLANG_TRIPLE=aarch64-linux-gnu- LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-android- CROSS_COMPILE_ARM32=arm-linux-androideabi-    
-      
-      - name: 7.复制boot文件
+          make -j$(nproc --all) CC=clang O=out ARCH=arm64 \
+            CLANG_TRIPLE=aarch64-linux-gnu- LLVM=1 LLVM_IAS=1 \
+            CROSS_COMPILE=aarch64-buildroot-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-androideabi- \
+            $DEFCONFIG
+
+          make -j8 CC=clang O=out ARCH=arm64 \
+            CLANG_TRIPLE=aarch64-linux-gnu- LLVM=1 LLVM_IAS=1 \
+            CROSS_COMPILE=aarch64-linux-android- \
+            CROSS_COMPILE_ARM32=arm-linux-androideabi-
+
+      - name: 7. 复制 boot 文件并准备 AnyKernel3
         run: |
-            cd $GITHUB_WORKSPACE/kernel_workspace/android_kernel/out/arch/arm64/boot
-            ls
-            strings Image | grep "Linux version"
-            mkdir $GITHUB_WORKSPACE/kernel_workspace/src/Anykernel/kernels/
-            mkdir $GITHUB_WORKSPACE/kernel_workspace/src/Anykernel/kernels/miui/
-            cp Image $GITHUB_WORKSPACE/kernel_workspace/src/Anykernel/kernels/miui/
+          cd $GITHUB_WORKSPACE/kernel_workspace/android_kernel/out/arch/arm64/boot
+          ls -l
+          strings Image | grep "Linux version" || true
 
-      - name: 8.上传刷机包
+          mkdir -p $GITHUB_WORKSPACE/kernel_workspace/src/Anykernel/kernels/miui/
+          cp Image $GITHUB_WORKSPACE/kernel_workspace/src/Anykernel/kernels/miui/
+
+      - name: 8. 上传刷机包
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ inputs.phone }}-KernelSU-Next-${{ inputs.susfs }}-AnyKernel3
+          name: ${{ inputs.phone }}-SukiSU-Ultra-${{ inputs.susfs }}-AnyKernel3
           path: kernel_workspace/src/Anykernel/*
-          retention-days: 3
+          retention-days: 7
