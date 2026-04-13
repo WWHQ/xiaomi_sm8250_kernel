@@ -49,8 +49,8 @@ jobs:
           cd $GITHUB_WORKSPACE/kernel_workspace
           # 这里建议换成更适合 cas 的基础内核仓库（推荐支持 cas 的社区仓库）
           # 示例：可替换为支持 cas 的仓库，如 yspbwx2010/kernel_xiaomi_sm8250_mod 或 NikoKernelX_SM8250 等
-          git clone https://github.com/clcwpwqi/kernel_xiaomi_sm8250_n0kernel --depth=1 android_kernel
-          git clone https://github.com/clcwpwqi/kernel.git src
+          git clone https://github.com/CoolestEnoch/xiaomi-10-ultra-kernel --depth=1 main
+          git clone https://github.com/CoolestEnoch/xiaomi-10-ultra-kernel.git src
           git clone https://gitlab.com/simonpunk/susfs4ksu.git -b kernel-4.19 --depth=1 susfs
 
       - name: 3. 添加 KernelSU Next
